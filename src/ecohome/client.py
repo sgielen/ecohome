@@ -234,3 +234,16 @@ class EcoHomeClient:
         response.raise_for_status()
         data = response.json()
         _raise_on_error(data, "updateSwitchState")
+
+    def set_value(self, device_code: str, address: str, value: int, dry_run: bool = False) -> None:
+        url = f"{_CLOUDSERVICE_BASE_URL}/deviceInfo/controlOfValue.json"
+        body = {"device_code": device_code, "address": address, "value": value}
+        if dry_run:
+            print(f"[dry-run] POST {url}?lang=nl_NL")
+            print(json.dumps(body, indent=2))
+            return
+        with self._http() as http:
+            response = http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
+        response.raise_for_status()
+        data = response.json()
+        _raise_on_error(data, "controlOfValue")

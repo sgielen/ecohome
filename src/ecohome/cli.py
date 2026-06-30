@@ -139,6 +139,25 @@ def cmd_status(client: EcoHomeClient, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_heating(client: EcoHomeClient, args: argparse.Namespace) -> int:
+    device_code = _auto_device_code(client, args)
+    detail = client.get_device_detail(device_code)
+    card = _find_card(detail["cardList"], has_modes=True)
+    if card is None:
+        print("Error: no heating card found on this device", file=sys.stderr)
+        sys.exit(1)
+    if args.heating_subcommand in ("on", "off"):
+        value = args.heating_subcommand == "on"
+        client.update_switch_state(device_code, card["switchAddress"], value, dry_run=args.dry_run)
+        if not args.dry_run:
+            print(f"Heating {'enabled' if value else 'disabled'}.")
+    elif args.heating_subcommand == "set-temp":
+        client.set_value(device_code, card["settingAddress"], args.value, dry_run=args.dry_run)
+        if not args.dry_run:
+            print(f"Heating target temperature set to {args.value}.")
+    return 0
+
+
 def cmd_hot_water(client: EcoHomeClient, args: argparse.Namespace) -> int:
     device_code = _auto_device_code(client, args)
     detail = client.get_device_detail(device_code)
@@ -146,10 +165,15 @@ def cmd_hot_water(client: EcoHomeClient, args: argparse.Namespace) -> int:
     if card is None:
         print("Error: no hot water card found on this device", file=sys.stderr)
         sys.exit(1)
-    value = args.state == "on"
-    client.update_switch_state(device_code, card["switchAddress"], value, dry_run=args.dry_run)
-    if not args.dry_run:
-        print(f"Hot water {'enabled' if value else 'disabled'}.")
+    if args.hw_subcommand in ("on", "off"):
+        value = args.hw_subcommand == "on"
+        client.update_switch_state(device_code, card["switchAddress"], value, dry_run=args.dry_run)
+        if not args.dry_run:
+            print(f"Hot water {'enabled' if value else 'disabled'}.")
+    elif args.hw_subcommand == "set-temp":
+        client.set_value(device_code, card["settingAddress"], args.value, dry_run=args.dry_run)
+        if not args.dry_run:
+            print(f"Hot water target temperature set to {args.value}.")
     return 0
 
 
@@ -168,8 +192,19 @@ def main() -> int:
     status_p = subparsers.add_parser("status", help="Show current temperatures and state")
     status_p.add_argument("--json", action="store_true", help="Output as JSON")
 
-    hw_p = subparsers.add_parser("hot-water", help="Enable or disable hot water")
-    hw_p.add_argument("state", choices=["on", "off"])
+    h_p = subparsers.add_parser("heating", help="Control heating")
+    h_sub = h_p.add_subparsers(dest="heating_subcommand", required=True)
+    h_sub.add_parser("on", help="Enable heating")
+    h_sub.add_parser("off", help="Disable heating")
+    h_temp_p = h_sub.add_parser("set-temp", help="Set heating target temperature")
+    h_temp_p.add_argument("value", type=int, help="Target temperature")
+
+    hw_p = subparsers.add_parser("hot-water", help="Control hot water")
+    hw_sub = hw_p.add_subparsers(dest="hw_subcommand", required=True)
+    hw_sub.add_parser("on", help="Enable hot water")
+    hw_sub.add_parser("off", help="Disable hot water")
+    hw_temp_p = hw_sub.add_parser("set-temp", help="Set hot water target temperature")
+    hw_temp_p.add_argument("value", type=int, help="Target temperature")
 
     args = parser.parse_args()
 
@@ -178,6 +213,8 @@ def main() -> int:
         try:
             if args.command == "status":
                 return cmd_status(client, args)
+            if args.command == "heating":
+                return cmd_heating(client, args)
             if args.command == "hot-water":
                 return cmd_hot_water(client, args)
             return 0
