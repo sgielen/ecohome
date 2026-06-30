@@ -208,6 +208,20 @@ class EcoHomeClient:
         _raise_on_error(data, "getDeviceDetailV3")
         return data["objectResult"]
 
+    def get_param_list(self, device_code: str, param_type: int) -> list[dict[str, Any]]:
+        """Return paramListV3 for the given type: 0=sensors, 1=operational, 2=settings."""
+        with self._http() as http:
+            response = http.post(
+                f"{_CRM_BASE_URL}/deviceInfo/paramListV3",
+                params={"lang": "nl_NL"},
+                headers=self._auth_headers(),
+                json={"deviceCode": device_code, "type": param_type, "isAutoRefresh": False},
+            )
+        response.raise_for_status()
+        data = response.json()
+        _raise_on_error(data, "paramListV3")
+        return data["objectResult"]
+
     def update_switch_state(self, device_code: str, address: str, value: bool, dry_run: bool = False) -> None:
         url = f"{_CLOUDSERVICE_BASE_URL}/deviceInfo/updateSwitchSate.json"
         body = {"device_code": device_code, "address": address, "value": value}

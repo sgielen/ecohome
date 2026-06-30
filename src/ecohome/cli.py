@@ -39,6 +39,42 @@ def _find_card(card_list: list, *, has_modes: bool) -> dict | None:
     return None
 
 
+def _flatten_params(param_list: list) -> list[dict]:
+    """Flatten paramListV3 result to a list of items. type=1 nests items inside modules."""
+    result = []
+    for item in param_list:
+        if "moduleContent" in item:
+            result.extend(item["moduleContent"])
+        else:
+            result.append(item)
+    return result
+
+
+def _usable_params(items: list[dict]) -> list[dict]:
+    """Return items with non-null, non-N/A values, with parsed value and stripped name."""
+    result = []
+    for item in items:
+        raw = item.get("addressValue")
+        if raw is None or raw == "N/A":
+            continue
+        try:
+            value: float | str = float(raw)
+        except (ValueError, TypeError):
+            value = str(raw)
+        result.append({
+            "address": item["address"],
+            "name": (item.get("pointName") or item["address"]).strip(),
+            "value": value,
+            "unit": item.get("unit") or "",
+        })
+    return result
+
+
+def _fmt_param(p: dict) -> str:
+    val = p["value"]
+    return f"{val:g}{p['unit']}" if isinstance(val, float) else f"{val}{p['unit']}"
+
+
 def cmd_status(client: EcoHomeClient, args: argparse.Namespace) -> int:
     device_code = _auto_device_code(client, args)
     detail = client.get_device_detail(device_code)
@@ -46,6 +82,9 @@ def cmd_status(client: EcoHomeClient, args: argparse.Namespace) -> int:
 
     heating = _find_card(detail["cardList"], has_modes=True)
     hot_water = _find_card(detail["cardList"], has_modes=False)
+
+    sensors = _usable_params(_flatten_params(client.get_param_list(device_code, 0)))
+    operational = _usable_params(_flatten_params(client.get_param_list(device_code, 1)))
 
     if args.json:
         output: dict = {}
@@ -63,6 +102,16 @@ def cmd_status(client: EcoHomeClient, args: argparse.Namespace) -> int:
                 "current_temp": float(hot_water["curTempMain"]) if hot_water.get("curTempMain") else None,
                 "target_temp": float(hot_water["settingTemp"]) if hot_water.get("settingTemp") else None,
             }
+        if sensors:
+            output["sensors"] = {
+                p["address"]: {"name": p["name"], "value": p["value"], "unit": p["unit"] or None}
+                for p in sensors
+            }
+        if operational:
+            output["operational"] = {
+                p["address"]: {"name": p["name"], "value": p["value"], "unit": p["unit"] or None}
+                for p in operational
+            }
         print(json_module.dumps(output, indent=2))
     else:
         if heating:
@@ -78,6 +127,14 @@ def cmd_status(client: EcoHomeClient, args: argparse.Namespace) -> int:
             t_main = hot_water.get("curTempMain", "?")
             t_set = hot_water.get("settingTemp", "?")
             print(f"Hot water: {state:<3}  {t_main}{unit}  →  {t_set}{unit}")
+        if sensors:
+            print("Sensors:")
+            for p in sensors:
+                print(f"  {p['name']}: {_fmt_param(p)}")
+        if operational:
+            print("Operational:")
+            for p in operational:
+                print(f"  {p['name']}: {_fmt_param(p)}")
 
     return 0
 
