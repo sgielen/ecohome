@@ -3,10 +3,10 @@ import json as json_module
 import os
 import sys
 
-from ecohome.client import EcoHomeClient
+from ecohome.client import EcoHomeClient, SessionExpiredError
 
 
-def _get_client(args: argparse.Namespace) -> EcoHomeClient:
+def _get_client(args: argparse.Namespace, force_relogin: bool = False) -> EcoHomeClient:
     username = args.username or os.environ.get("ECOHOME_USER")
     password = args.password or os.environ.get("ECOHOME_PASSWORD")
     if not username or not password:
@@ -15,7 +15,7 @@ def _get_client(args: argparse.Namespace) -> EcoHomeClient:
             file=sys.stderr,
         )
         sys.exit(1)
-    return EcoHomeClient.login(username, password)
+    return EcoHomeClient.login(username, password, force_relogin=force_relogin)
 
 
 def _auto_device_code(client: EcoHomeClient, args: argparse.Namespace) -> str:
@@ -115,12 +115,19 @@ def main() -> int:
     hw_p.add_argument("state", choices=["on", "off"])
 
     args = parser.parse_args()
-    client = _get_client(args)
 
-    if args.command == "status":
-        return cmd_status(client, args)
-    if args.command == "hot-water":
-        return cmd_hot_water(client, args)
+    for attempt in range(2):
+        client = _get_client(args, force_relogin=(attempt > 0))
+        try:
+            if args.command == "status":
+                return cmd_status(client, args)
+            if args.command == "hot-water":
+                return cmd_hot_water(client, args)
+            return 0
+        except SessionExpiredError:
+            if attempt == 0:
+                continue
+            raise
 
     return 0
 

@@ -37,12 +37,23 @@ def _save_credentials(creds: dict[str, Any]) -> None:
     _CREDENTIALS_FILE.chmod(0o600)
 
 
+class SessionExpiredError(RuntimeError):
+    pass
+
+
 def _raise_on_error(data: dict[str, Any], endpoint: str) -> None:
-    if "errorCode" in data:  # crmservice uses camelCase and int 200
+    if "errorCode" in data:  # crmservice: camelCase, int 200 for success
         if data["errorCode"] != 200:
-            raise RuntimeError(f"{endpoint} failed: {data["errorCode"]} {data.get('errorMsg', 'Unknown error')}")
-    elif data.get("error_code") != "0":  # cloudservice uses snake_case and string "0"
-        raise RuntimeError(f"{endpoint} failed: {data.get('error_code')} {data.get('error_msg', 'Unknown error')}")
+            raise RuntimeError(f"{endpoint} failed: {data['errorCode']} {data.get('errorMsg', 'Unknown error')}")
+    elif "error_code" in data:  # cloudservice: snake_case, string "0" for success
+        if data["error_code"] != "0":
+            raise RuntimeError(f"{endpoint} failed: {data['error_code']} {data.get('error_msg', 'Unknown error')}")
+    elif "sub_code" in data:  # gateway/auth error, e.g. sub_code="-100" means session expired
+        if data["sub_code"] == "-100":
+            raise SessionExpiredError(f"{endpoint}: session expired")
+        raise RuntimeError(f"{endpoint} failed: sub_code={data['sub_code']} {data.get('sub_msg', 'Unknown error')}")
+    else:
+        raise RuntimeError(f"{endpoint} failed: unrecognized response format: {data}")
 
 
 class EcoHomeClient:
@@ -65,10 +76,11 @@ class EcoHomeClient:
         username: str,
         password: str,
         save_credentials: bool = True,
+        force_relogin: bool = False,
     ) -> "EcoHomeClient":
         """Return an authenticated client, reusing stored credentials when available."""
         creds: dict[str, Any] = _load_credentials() if save_credentials else {}
-        if username in creds:
+        if not force_relogin and username in creds:
             stored = creds[username]
             client = cls(
                 token=stored["x_token"],
@@ -123,8 +135,9 @@ class EcoHomeClient:
             )
         try:
             response.raise_for_status()
+            _raise_on_error(response.json(), "getUserInfo")
             return True
-        except httpx.HTTPStatusError:
+        except (httpx.HTTPStatusError, RuntimeError):
             return False
 
     def logout(self) -> None:
