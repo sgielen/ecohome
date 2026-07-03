@@ -125,6 +125,8 @@ uv run ruff check src/
 ### Releases
 
 - Update version number in `pyproject.toml`
+- Run `uv sync`, commit and push all changes
 - Run `uv build`
 - Run `git tag v0.1.1` (same version as in `pyproject.toml`)
+- Run `git push --tags`
 - Run `uvx twine upload dist/*`
