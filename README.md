@@ -121,3 +121,10 @@ Credentials (username, user ID, token, session cookie) are stored in
 uv sync
 uv run ruff check src/
 ```
+
+### Releases
+
+- Update version number in `pyproject.toml`
+- Run `uv build`
+- Run `git tag v0.1.1` (same version as in `pyproject.toml`)
+- Run `uvx twine upload dist/*`
