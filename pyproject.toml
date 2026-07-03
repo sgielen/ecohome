@@ -10,6 +10,12 @@ requires-python = ">=3.14"
 dependencies = [
     "httpx>=0.28.1",
 ]
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.urls]
+Homepage = "https://github.com/sgielen/ecohome"
+Issues = "https://github.com/sgielen/ecohome/issues"
 
 [project.scripts]
 pyecohome = "ecohome.cli:main"
