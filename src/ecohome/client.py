@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -56,7 +57,7 @@ def _raise_on_error(data: dict[str, Any], endpoint: str) -> None:
         raise RuntimeError(f"{endpoint} failed: unrecognized response format: {data}")
 
 
-class EcoHomeClient:
+class AsyncEcoHomeClient:
     def __init__(
         self,
         *,
@@ -71,13 +72,13 @@ class EcoHomeClient:
         self._username = username
 
     @classmethod
-    def login(
+    async def login(
         cls,
         username: str,
         password: str,
         save_credentials: bool = True,
         force_relogin: bool = False,
-    ) -> "EcoHomeClient":
+    ) -> "AsyncEcoHomeClient":
         """Return an authenticated client, reusing stored credentials when available."""
         creds: dict[str, Any] = _load_credentials() if save_credentials else {}
         if not force_relogin and username in creds:
@@ -88,13 +89,13 @@ class EcoHomeClient:
                 user_id=stored["user_id"],
                 username=username,
             )
-            if client.is_logged_in():
+            if await client.is_logged_in():
                 return client
 
         password_md5 = hashlib.md5(password.encode()).hexdigest()
 
-        with httpx.Client() as http:
-            response = http.post(
+        async with httpx.AsyncClient() as http:
+            response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/user/login.json",
                 params={"lang": "nl_NL"},
                 headers=_HEADERS,
@@ -118,17 +119,12 @@ class EcoHomeClient:
             }
             _save_credentials(creds)
 
-        return cls(
-            token=x_token,
-            cookie=cookie,
-            user_id=user_id,
-            username=username,
-        )
+        return cls(token=x_token, cookie=cookie, user_id=user_id, username=username)
 
-    def is_logged_in(self) -> bool:
+    async def is_logged_in(self) -> bool:
         """Do an API request to see if the user is logged in."""
-        with httpx.Client(cookies=self._cookie) as http:
-            response = http.get(
+        async with self._http() as http:
+            response = await http.get(
                 f"{_CLOUDSERVICE_BASE_URL}/user/getUserInfo.json",
                 params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
@@ -140,10 +136,10 @@ class EcoHomeClient:
         except (httpx.HTTPStatusError, RuntimeError):
             return False
 
-    def logout(self) -> None:
+    async def logout(self) -> None:
         """Log out and remove stored credentials for this user."""
-        with httpx.Client(cookies=self._cookie) as http:
-            response = http.post(
+        async with self._http() as http:
+            response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/user/logout.json",
                 params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
@@ -166,12 +162,12 @@ class EcoHomeClient:
             raise RuntimeError("Not authenticated")
         return {**_HEADERS, "x-token": self._token}
 
-    def _http(self) -> httpx.Client:
-        return httpx.Client(cookies=self._cookie)
+    def _http(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(cookies=self._cookie)
 
-    def list_devices(self, page_size: int = 1000) -> list[dict[str, Any]]:
-        with self._http() as http:
-            response = http.post(
+    async def list_devices(self, page_size: int = 1000) -> list[dict[str, Any]]:
+        async with self._http() as http:
+            response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/device/deviceList.json",
                 params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
@@ -182,9 +178,9 @@ class EcoHomeClient:
         _raise_on_error(data, "deviceList")
         return data["object_result"]
 
-    def get_device_base_info(self, device_code: str) -> dict[str, Any]:
-        with self._http() as http:
-            response = http.post(
+    async def get_device_base_info(self, device_code: str) -> dict[str, Any]:
+        async with self._http() as http:
+            response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/deviceInfo/getDeviceBaseInfo.json",
                 params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
@@ -195,9 +191,9 @@ class EcoHomeClient:
         _raise_on_error(data, "getDeviceBaseInfo")
         return data["object_result"]
 
-    def get_device_detail(self, device_code: str) -> dict[str, Any]:
-        with self._http() as http:
-            response = http.post(
+    async def get_device_detail(self, device_code: str) -> dict[str, Any]:
+        async with self._http() as http:
+            response = await http.post(
                 f"{_CRM_BASE_URL}/deviceInfo/getDeviceDetailV3",
                 params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
@@ -208,10 +204,10 @@ class EcoHomeClient:
         _raise_on_error(data, "getDeviceDetailV3")
         return data["objectResult"]
 
-    def get_param_list(self, device_code: str, param_type: int) -> list[dict[str, Any]]:
+    async def get_param_list(self, device_code: str, param_type: int) -> list[dict[str, Any]]:
         """Return paramListV3 for the given type: 0=sensors, 1=operational, 2=settings."""
-        with self._http() as http:
-            response = http.post(
+        async with self._http() as http:
+            response = await http.post(
                 f"{_CRM_BASE_URL}/deviceInfo/paramListV3",
                 params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
@@ -222,28 +218,70 @@ class EcoHomeClient:
         _raise_on_error(data, "paramListV3")
         return data["objectResult"]
 
-    def update_switch_state(self, device_code: str, address: str, value: bool, dry_run: bool = False) -> None:
+    async def update_switch_state(self, device_code: str, address: str, value: bool, dry_run: bool = False) -> None:
         url = f"{_CLOUDSERVICE_BASE_URL}/deviceInfo/updateSwitchSate.json"
         body = {"device_code": device_code, "address": address, "value": value}
         if dry_run:
             print(f"[dry-run] POST {url}?lang=nl_NL")
             print(json.dumps(body, indent=2))
             return
-        with self._http() as http:
-            response = http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
+        async with self._http() as http:
+            response = await http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
         response.raise_for_status()
         data = response.json()
         _raise_on_error(data, "updateSwitchState")
 
-    def set_value(self, device_code: str, address: str, value: int, dry_run: bool = False) -> None:
+    async def set_value(self, device_code: str, address: str, value: int, dry_run: bool = False) -> None:
         url = f"{_CLOUDSERVICE_BASE_URL}/deviceInfo/controlOfValue.json"
         body = {"device_code": device_code, "address": address, "value": value}
         if dry_run:
             print(f"[dry-run] POST {url}?lang=nl_NL")
             print(json.dumps(body, indent=2))
             return
-        with self._http() as http:
-            response = http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
+        async with self._http() as http:
+            response = await http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
         response.raise_for_status()
         data = response.json()
         _raise_on_error(data, "controlOfValue")
+
+
+class EcoHomeClient:
+    """Synchronous wrapper around AsyncEcoHomeClient."""
+
+    def __init__(self, async_client: AsyncEcoHomeClient):
+        self._async = async_client
+
+    @classmethod
+    def login(
+        cls,
+        username: str,
+        password: str,
+        save_credentials: bool = True,
+        force_relogin: bool = False,
+    ) -> "EcoHomeClient":
+        """Return an authenticated client, reusing stored credentials when available."""
+        return cls(asyncio.run(AsyncEcoHomeClient.login(username, password, save_credentials, force_relogin)))
+
+    def is_logged_in(self) -> bool:
+        return asyncio.run(self._async.is_logged_in())
+
+    def logout(self) -> None:
+        asyncio.run(self._async.logout())
+
+    def list_devices(self, page_size: int = 1000) -> list[dict[str, Any]]:
+        return asyncio.run(self._async.list_devices(page_size))
+
+    def get_device_base_info(self, device_code: str) -> dict[str, Any]:
+        return asyncio.run(self._async.get_device_base_info(device_code))
+
+    def get_device_detail(self, device_code: str) -> dict[str, Any]:
+        return asyncio.run(self._async.get_device_detail(device_code))
+
+    def get_param_list(self, device_code: str, param_type: int) -> list[dict[str, Any]]:
+        return asyncio.run(self._async.get_param_list(device_code, param_type))
+
+    def update_switch_state(self, device_code: str, address: str, value: bool, dry_run: bool = False) -> None:
+        asyncio.run(self._async.update_switch_state(device_code, address, value, dry_run))
+
+    def set_value(self, device_code: str, address: str, value: int, dry_run: bool = False) -> None:
+        asyncio.run(self._async.set_value(device_code, address, value, dry_run))
