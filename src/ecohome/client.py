@@ -80,7 +80,7 @@ class AsyncEcoHomeClient:
         force_relogin: bool = False,
     ) -> "AsyncEcoHomeClient":
         """Return an authenticated client, reusing stored credentials when available."""
-        creds: dict[str, Any] = _load_credentials() if save_credentials else {}
+        creds: dict[str, Any] = await asyncio.to_thread(_load_credentials) if save_credentials else {}
         if not force_relogin and username in creds:
             stored = creds[username]
             client = cls(
@@ -117,7 +117,7 @@ class AsyncEcoHomeClient:
                 "x_token": x_token,
                 "cookie": cookie,
             }
-            _save_credentials(creds)
+            await asyncio.to_thread(_save_credentials, creds)
 
         return cls(token=x_token, cookie=cookie, user_id=user_id, username=username)
 
@@ -148,9 +148,9 @@ class AsyncEcoHomeClient:
         response.raise_for_status()
 
         if self._username:
-            creds = _load_credentials()
+            creds = await asyncio.to_thread(_load_credentials)
             creds.pop(self._username, None)
-            _save_credentials(creds)
+            await asyncio.to_thread(_save_credentials, creds)
 
         self._token = None
         self._cookie = {}
