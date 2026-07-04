@@ -94,7 +94,7 @@ class AsyncEcoHomeClient:
 
         password_md5 = hashlib.md5(password.encode()).hexdigest()
 
-        async with httpx.AsyncClient() as http:
+        async with await asyncio.to_thread(httpx.AsyncClient) as http:
             response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/user/login.json",
                 params={"lang": "nl_NL"},
@@ -123,7 +123,7 @@ class AsyncEcoHomeClient:
 
     async def is_logged_in(self) -> bool:
         """Do an API request to see if the user is logged in."""
-        async with self._http() as http:
+        async with await self._http() as http:
             response = await http.get(
                 f"{_CLOUDSERVICE_BASE_URL}/user/getUserInfo.json",
                 params={"lang": "nl_NL"},
@@ -138,7 +138,7 @@ class AsyncEcoHomeClient:
 
     async def logout(self) -> None:
         """Log out and remove stored credentials for this user."""
-        async with self._http() as http:
+        async with await self._http() as http:
             response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/user/logout.json",
                 params={"lang": "nl_NL"},
@@ -162,11 +162,11 @@ class AsyncEcoHomeClient:
             raise RuntimeError("Not authenticated")
         return {**_HEADERS, "x-token": self._token}
 
-    def _http(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(cookies=self._cookie)
+    async def _http(self) -> httpx.AsyncClient:
+        return await asyncio.to_thread(lambda: httpx.AsyncClient(cookies=self._cookie))
 
     async def list_devices(self, page_size: int = 1000) -> list[dict[str, Any]]:
-        async with self._http() as http:
+        async with await self._http() as http:
             response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/device/deviceList.json",
                 params={"lang": "nl_NL"},
@@ -179,7 +179,7 @@ class AsyncEcoHomeClient:
         return data["object_result"]
 
     async def get_device_base_info(self, device_code: str) -> dict[str, Any]:
-        async with self._http() as http:
+        async with await self._http() as http:
             response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/deviceInfo/getDeviceBaseInfo.json",
                 params={"lang": "nl_NL"},
@@ -192,7 +192,7 @@ class AsyncEcoHomeClient:
         return data["object_result"]
 
     async def get_device_detail(self, device_code: str) -> dict[str, Any]:
-        async with self._http() as http:
+        async with await self._http() as http:
             response = await http.post(
                 f"{_CRM_BASE_URL}/deviceInfo/getDeviceDetailV3",
                 params={"lang": "nl_NL"},
@@ -206,7 +206,7 @@ class AsyncEcoHomeClient:
 
     async def get_param_list(self, device_code: str, param_type: int) -> list[dict[str, Any]]:
         """Return paramListV3 for the given type: 0=sensors, 1=operational, 2=settings."""
-        async with self._http() as http:
+        async with await self._http() as http:
             response = await http.post(
                 f"{_CRM_BASE_URL}/deviceInfo/paramListV3",
                 params={"lang": "nl_NL"},
@@ -225,7 +225,7 @@ class AsyncEcoHomeClient:
             print(f"[dry-run] POST {url}?lang=nl_NL")
             print(json.dumps(body, indent=2))
             return
-        async with self._http() as http:
+        async with await self._http() as http:
             response = await http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
         response.raise_for_status()
         data = response.json()
@@ -238,7 +238,7 @@ class AsyncEcoHomeClient:
             print(f"[dry-run] POST {url}?lang=nl_NL")
             print(json.dumps(body, indent=2))
             return
-        async with self._http() as http:
+        async with await self._http() as http:
             response = await http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
         response.raise_for_status()
         data = response.json()
