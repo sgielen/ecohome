@@ -1,6 +1,6 @@
 [project]
 name = "ecohome"
-version = "0.1.2"
+version = "0.1.3"
 description = "Open-source Python implementation of the New Energy (Batavia Heat) Eco-Home API"
 readme = "README.md"
 authors = [
