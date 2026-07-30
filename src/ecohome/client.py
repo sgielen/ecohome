@@ -45,25 +45,23 @@ class SessionExpiredError(RuntimeError):
     pass
 
 
-class _ApiError(RuntimeError):
-    """An error response from the EcoHome API, carrying its raw error code."""
+class ApiError(RuntimeError):
+    """An error response from the EcoHome API."""
 
-    def __init__(self, message: str, error_code: Any):
-        super().__init__(message)
+    def __init__(self, endpoint: str, error_code: str, error_msg: str):
+        self.endpoint = endpoint
         self.error_code = error_code
+        self.error_msg = error_msg
+        super().__init__(f"{endpoint} failed: {error_code} {error_msg}")
 
 
 def _raise_on_error(data: dict[str, Any], endpoint: str) -> None:
     if "errorCode" in data:  # crmservice: camelCase, int 200 for success
         if data["errorCode"] != 200:
-            raise _ApiError(
-                f"{endpoint} failed: {data['errorCode']} {data.get('errorMsg', 'Unknown error')}", data["errorCode"]
-            )
+            raise ApiError(endpoint, str(data["errorCode"]), data.get("errorMsg", "Unknown error"))
     elif "error_code" in data:  # cloudservice: snake_case, string "0" for success
         if data["error_code"] != "0":
-            raise _ApiError(
-                f"{endpoint} failed: {data['error_code']} {data.get('error_msg', 'Unknown error')}", data["error_code"]
-            )
+            raise ApiError(endpoint, str(data["error_code"]), data.get("error_msg", "Unknown error"))
     elif "sub_code" in data:  # gateway/auth error, e.g. sub_code="-100" means session expired
         if data["sub_code"] == "-100":
             raise SessionExpiredError(f"{endpoint}: session expired")
@@ -78,7 +76,7 @@ def _is_retryable_error(error: Exception) -> bool:
     Takes the raised exception itself (not just an error code) so future checks can also key
     off other error shapes, e.g. httpx.HTTPStatusError.response.status_code.
     """
-    return isinstance(error, _ApiError) and str(error.error_code) == "-1"
+    return isinstance(error, ApiError) and error.error_code == "-1"
 
 
 class AsyncEcoHomeClient:
@@ -105,6 +103,7 @@ class AsyncEcoHomeClient:
         save_credentials: bool = True,
         force_relogin: bool = False,
         timeout: httpx.Timeout | float | None = None,
+        autoretries: int = 2,
     ) -> "AsyncEcoHomeClient":
         """Return an authenticated client, reusing stored credentials when available."""
         creds: dict[str, Any] = await asyncio.to_thread(_load_credentials) if save_credentials else {}
@@ -115,6 +114,7 @@ class AsyncEcoHomeClient:
                 cookie=stored["cookie"],
                 user_id=stored["user_id"],
                 username=username,
+                autoretries=autoretries,
             )
             if await client.is_logged_in(timeout=timeout):
                 return client
@@ -146,7 +146,7 @@ class AsyncEcoHomeClient:
             }
             await asyncio.to_thread(_save_credentials, creds)
 
-        return cls(token=x_token, cookie=cookie, user_id=user_id, username=username)
+        return cls(token=x_token, cookie=cookie, user_id=user_id, username=username, autoretries=autoretries)
 
     async def is_logged_in(self, timeout: httpx.Timeout | float | None = None) -> bool:
         """Do an API request to see if the user is logged in."""
@@ -303,9 +303,8 @@ class AsyncEcoHomeClient:
 class EcoHomeClient:
     """Synchronous wrapper around AsyncEcoHomeClient."""
 
-    def __init__(self, async_client: AsyncEcoHomeClient, autoretries: int = 2):
+    def __init__(self, async_client: AsyncEcoHomeClient):
         self._async = async_client
-        self._async._autoretries = autoretries
 
     @classmethod
     def login(
@@ -315,9 +314,14 @@ class EcoHomeClient:
         save_credentials: bool = True,
         force_relogin: bool = False,
         timeout: httpx.Timeout | float | None = None,
+        autoretries: int = 2,
     ) -> "EcoHomeClient":
         """Return an authenticated client, reusing stored credentials when available."""
-        return cls(asyncio.run(AsyncEcoHomeClient.login(username, password, save_credentials, force_relogin, timeout)))
+        return cls(
+            asyncio.run(
+                AsyncEcoHomeClient.login(username, password, save_credentials, force_relogin, timeout, autoretries)
+            )
+        )
 
     def is_logged_in(self, timeout: httpx.Timeout | float | None = None) -> bool:
         return asyncio.run(self._async.is_logged_in(timeout))
