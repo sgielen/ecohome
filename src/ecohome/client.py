@@ -45,19 +45,40 @@ class SessionExpiredError(RuntimeError):
     pass
 
 
+class _ApiError(RuntimeError):
+    """An error response from the EcoHome API, carrying its raw error code."""
+
+    def __init__(self, message: str, error_code: Any):
+        super().__init__(message)
+        self.error_code = error_code
+
+
 def _raise_on_error(data: dict[str, Any], endpoint: str) -> None:
     if "errorCode" in data:  # crmservice: camelCase, int 200 for success
         if data["errorCode"] != 200:
-            raise RuntimeError(f"{endpoint} failed: {data['errorCode']} {data.get('errorMsg', 'Unknown error')}")
+            raise _ApiError(
+                f"{endpoint} failed: {data['errorCode']} {data.get('errorMsg', 'Unknown error')}", data["errorCode"]
+            )
     elif "error_code" in data:  # cloudservice: snake_case, string "0" for success
         if data["error_code"] != "0":
-            raise RuntimeError(f"{endpoint} failed: {data['error_code']} {data.get('error_msg', 'Unknown error')}")
+            raise _ApiError(
+                f"{endpoint} failed: {data['error_code']} {data.get('error_msg', 'Unknown error')}", data["error_code"]
+            )
     elif "sub_code" in data:  # gateway/auth error, e.g. sub_code="-100" means session expired
         if data["sub_code"] == "-100":
             raise SessionExpiredError(f"{endpoint}: session expired")
         raise RuntimeError(f"{endpoint} failed: sub_code={data['sub_code']} {data.get('sub_msg', 'Unknown error')}")
     else:
         raise RuntimeError(f"{endpoint} failed: unrecognized response format: {data}")
+
+
+def _is_retryable_error(error: Exception) -> bool:
+    """Whether an error raised by an API call is worth retrying.
+
+    Takes the raised exception itself (not just an error code) so future checks can also key
+    off other error shapes, e.g. httpx.HTTPStatusError.response.status_code.
+    """
+    return isinstance(error, _ApiError) and str(error.error_code) == "-1"
 
 
 class AsyncEcoHomeClient:
@@ -68,11 +89,13 @@ class AsyncEcoHomeClient:
         cookie: dict[str, str] | None = None,
         user_id: str | None = None,
         username: str | None = None,
+        autoretries: int = 2,
     ):
         self._token = token
         self._cookie: dict[str, str] = cookie or {}
         self._user_id = user_id
         self._username = username
+        self._autoretries = autoretries
 
     @classmethod
     async def login(
@@ -137,7 +160,7 @@ class AsyncEcoHomeClient:
             response.raise_for_status()
             _raise_on_error(response.json(), "getUserInfo")
             return True
-        except httpx.HTTPStatusError, RuntimeError:
+        except (httpx.HTTPStatusError, RuntimeError):
             return False
 
     async def logout(self, timeout: httpx.Timeout | float | None = None) -> None:
@@ -244,11 +267,17 @@ class AsyncEcoHomeClient:
             print(f"[dry-run] POST {url}?lang=nl_NL")
             print(json.dumps(body, indent=2))
             return
-        async with await self._http(timeout) as http:
-            response = await http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
-        response.raise_for_status()
-        data = response.json()
-        _raise_on_error(data, "updateSwitchState")
+        for attempt in range(self._autoretries + 1):
+            try:
+                async with await self._http(timeout) as http:
+                    response = await http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
+                response.raise_for_status()
+                data = response.json()
+                _raise_on_error(data, "updateSwitchState")
+                return
+            except Exception as error:
+                if attempt >= self._autoretries or not _is_retryable_error(error):
+                    raise
 
     async def set_value(
         self,
@@ -274,8 +303,9 @@ class AsyncEcoHomeClient:
 class EcoHomeClient:
     """Synchronous wrapper around AsyncEcoHomeClient."""
 
-    def __init__(self, async_client: AsyncEcoHomeClient):
+    def __init__(self, async_client: AsyncEcoHomeClient, autoretries: int = 2):
         self._async = async_client
+        self._async._autoretries = autoretries
 
     @classmethod
     def login(
