@@ -160,7 +160,7 @@ class AsyncEcoHomeClient:
             response.raise_for_status()
             _raise_on_error(response.json(), "getUserInfo")
             return True
-        except (httpx.HTTPStatusError, RuntimeError):
+        except httpx.HTTPStatusError, RuntimeError:
             return False
 
     async def logout(self, timeout: httpx.Timeout | float | None = None) -> None:
