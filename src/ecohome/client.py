@@ -55,6 +55,13 @@ class ApiError(RuntimeError):
         super().__init__(f"{endpoint} failed: {error_code} {error_msg}")
 
 
+class AuthenticationFailedError(ApiError):
+    """Login failed with incorrect username or password."""
+
+    def __init__(self, endpoint: str, error_code: str, error_msg: str):
+        super().__init__(endpoint, error_code, error_msg)
+
+
 def _raise_on_error(data: dict[str, Any], endpoint: str) -> None:
     if "errorCode" in data:  # crmservice: camelCase, int 200 for success
         if data["errorCode"] != 200:
@@ -131,6 +138,18 @@ class AsyncEcoHomeClient:
         response.raise_for_status()
 
         data = response.json()
+
+        # Annoyingly, an "incorrect username or password" error has error code
+        # -1, not anything distinguishable, so we just recognize it by message.
+        incorrectAuthErrors = [
+            "Fout gebruikersnaam of wachtwoord",  # nl_NL
+            "Error username or password",  # en_US
+            "Fehler Benutzername oder Passwort",  # de_DE
+            "用户名/密码错误",  # others
+        ]
+        if data['error_msg'] in incorrectAuthErrors:
+            raise AuthenticationFailedError("login", data['error_code'], data['error_msg'])
+
         _raise_on_error(data, "login")
 
         result = data["object_result"]
