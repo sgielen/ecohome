@@ -129,4 +129,4 @@ uv run ruff check src/
 - Run `uv build`
 - Run `git tag v0.1.1` (same version as in `pyproject.toml`)
 - Run `git push --tags`
-- Run `uvx twine upload dist/*`
+- Run `uvx twine upload dist/ecohome-0.1.1*`
