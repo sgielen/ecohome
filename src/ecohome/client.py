@@ -45,19 +45,38 @@ class SessionExpiredError(RuntimeError):
     pass
 
 
+class ApiError(RuntimeError):
+    """An error response from the EcoHome API."""
+
+    def __init__(self, endpoint: str, error_code: str, error_msg: str):
+        self.endpoint = endpoint
+        self.error_code = error_code
+        self.error_msg = error_msg
+        super().__init__(f"{endpoint} failed: {error_code} {error_msg}")
+
+
 def _raise_on_error(data: dict[str, Any], endpoint: str) -> None:
     if "errorCode" in data:  # crmservice: camelCase, int 200 for success
         if data["errorCode"] != 200:
-            raise RuntimeError(f"{endpoint} failed: {data['errorCode']} {data.get('errorMsg', 'Unknown error')}")
+            raise ApiError(endpoint, str(data["errorCode"]), data.get("errorMsg", "Unknown error"))
     elif "error_code" in data:  # cloudservice: snake_case, string "0" for success
         if data["error_code"] != "0":
-            raise RuntimeError(f"{endpoint} failed: {data['error_code']} {data.get('error_msg', 'Unknown error')}")
+            raise ApiError(endpoint, str(data["error_code"]), data.get("error_msg", "Unknown error"))
     elif "sub_code" in data:  # gateway/auth error, e.g. sub_code="-100" means session expired
         if data["sub_code"] == "-100":
             raise SessionExpiredError(f"{endpoint}: session expired")
         raise RuntimeError(f"{endpoint} failed: sub_code={data['sub_code']} {data.get('sub_msg', 'Unknown error')}")
     else:
         raise RuntimeError(f"{endpoint} failed: unrecognized response format: {data}")
+
+
+def _is_retryable_error(error: Exception) -> bool:
+    """Whether an error raised by an API call is worth retrying.
+
+    Takes the raised exception itself (not just an error code) so future checks can also key
+    off other error shapes, e.g. httpx.HTTPStatusError.response.status_code.
+    """
+    return isinstance(error, ApiError) and error.error_code == "-1"
 
 
 class AsyncEcoHomeClient:
@@ -68,11 +87,13 @@ class AsyncEcoHomeClient:
         cookie: dict[str, str] | None = None,
         user_id: str | None = None,
         username: str | None = None,
+        autoretries: int = 2,
     ):
         self._token = token
         self._cookie: dict[str, str] = cookie or {}
         self._user_id = user_id
         self._username = username
+        self._autoretries = autoretries
 
     @classmethod
     async def login(
@@ -82,6 +103,7 @@ class AsyncEcoHomeClient:
         save_credentials: bool = True,
         force_relogin: bool = False,
         timeout: httpx.Timeout | float | None = None,
+        autoretries: int = 2,
     ) -> "AsyncEcoHomeClient":
         """Return an authenticated client, reusing stored credentials when available."""
         creds: dict[str, Any] = await asyncio.to_thread(_load_credentials) if save_credentials else {}
@@ -92,6 +114,7 @@ class AsyncEcoHomeClient:
                 cookie=stored["cookie"],
                 user_id=stored["user_id"],
                 username=username,
+                autoretries=autoretries,
             )
             if await client.is_logged_in(timeout=timeout):
                 return client
@@ -123,7 +146,7 @@ class AsyncEcoHomeClient:
             }
             await asyncio.to_thread(_save_credentials, creds)
 
-        return cls(token=x_token, cookie=cookie, user_id=user_id, username=username)
+        return cls(token=x_token, cookie=cookie, user_id=user_id, username=username, autoretries=autoretries)
 
     async def is_logged_in(self, timeout: httpx.Timeout | float | None = None) -> bool:
         """Do an API request to see if the user is logged in."""
@@ -244,11 +267,17 @@ class AsyncEcoHomeClient:
             print(f"[dry-run] POST {url}?lang=nl_NL")
             print(json.dumps(body, indent=2))
             return
-        async with await self._http(timeout) as http:
-            response = await http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
-        response.raise_for_status()
-        data = response.json()
-        _raise_on_error(data, "updateSwitchState")
+        for attempt in range(self._autoretries + 1):
+            try:
+                async with await self._http(timeout) as http:
+                    response = await http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
+                response.raise_for_status()
+                data = response.json()
+                _raise_on_error(data, "updateSwitchState")
+                return
+            except Exception as error:
+                if attempt >= self._autoretries or not _is_retryable_error(error):
+                    raise
 
     async def set_value(
         self,
@@ -285,9 +314,14 @@ class EcoHomeClient:
         save_credentials: bool = True,
         force_relogin: bool = False,
         timeout: httpx.Timeout | float | None = None,
+        autoretries: int = 2,
     ) -> "EcoHomeClient":
         """Return an authenticated client, reusing stored credentials when available."""
-        return cls(asyncio.run(AsyncEcoHomeClient.login(username, password, save_credentials, force_relogin, timeout)))
+        return cls(
+            asyncio.run(
+                AsyncEcoHomeClient.login(username, password, save_credentials, force_relogin, timeout, autoretries)
+            )
+        )
 
     def is_logged_in(self, timeout: httpx.Timeout | float | None = None) -> bool:
         return asyncio.run(self._async.is_logged_in(timeout))
