@@ -21,7 +21,7 @@ def _get_client(args: argparse.Namespace, force_relogin: bool = False) -> EcoHom
 def _auto_device_code(client: EcoHomeClient, args: argparse.Namespace) -> str:
     if args.device:
         return args.device
-    devices = client.list_devices()
+    devices = client.list_all_devices()
     if not devices:
         print("Error: no devices found", file=sys.stderr)
         sys.exit(1)
