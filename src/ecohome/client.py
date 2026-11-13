@@ -228,6 +228,36 @@ class AsyncEcoHomeClient:
         _raise_on_error(data, "deviceList")
         return data["object_result"]
 
+    async def list_shared_devices(self, timeout: httpx.Timeout | float | None = None) -> list[dict[str, Any]]:
+        """Return devices that other users have shared with this account.
+
+        Records have the same shape as those returned by list_devices().
+        """
+        if self._user_id is None:
+            raise RuntimeError("Not authenticated")
+        async with await self._http(timeout) as http:
+            response = await http.post(
+                f"{_CLOUDSERVICE_BASE_URL}/device/getMyAcceptDeviceShareDataList.json",
+                params={"lang": "nl_NL"},
+                headers=self._auth_headers(),
+                json={"to_user": self._user_id},
+            )
+        response.raise_for_status()
+        data = response.json()
+        _raise_on_error(data, "getMyAcceptDeviceShareDataList")
+        return data["object_result"] or []
+
+    async def list_all_devices(
+        self, page_size: int = 1000, timeout: httpx.Timeout | float | None = None
+    ) -> list[dict[str, Any]]:
+        """Return owned devices followed by devices shared with this account, deduplicated by device_code."""
+        owned, shared = await asyncio.gather(
+            self.list_devices(page_size, timeout),
+            self.list_shared_devices(timeout),
+        )
+        owned_codes = {d["device_code"] for d in owned}
+        return owned + [d for d in shared if d["device_code"] not in owned_codes]
+
     async def get_device_base_info(
         self, device_code: str, timeout: httpx.Timeout | float | None = None
     ) -> dict[str, Any]:
@@ -350,6 +380,14 @@ class EcoHomeClient:
 
     def list_devices(self, page_size: int = 1000, timeout: httpx.Timeout | float | None = None) -> list[dict[str, Any]]:
         return asyncio.run(self._async.list_devices(page_size, timeout))
+
+    def list_shared_devices(self, timeout: httpx.Timeout | float | None = None) -> list[dict[str, Any]]:
+        return asyncio.run(self._async.list_shared_devices(timeout))
+
+    def list_all_devices(
+        self, page_size: int = 1000, timeout: httpx.Timeout | float | None = None
+    ) -> list[dict[str, Any]]:
+        return asyncio.run(self._async.list_all_devices(page_size, timeout))
 
     def get_device_base_info(self, device_code: str, timeout: httpx.Timeout | float | None = None) -> dict[str, Any]:
         return asyncio.run(self._async.get_device_base_info(device_code, timeout))

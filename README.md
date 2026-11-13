@@ -95,8 +95,9 @@ from ecohome.client import EcoHomeClient
 
 client = EcoHomeClient.login("you@example.com", "yourpassword")
 
-# List devices
-devices = client.list_devices()
+# List devices: owned ones and ones shared with you
+# (or use list_devices() / list_shared_devices() for either kind alone)
+devices = client.list_all_devices()
 device_code = devices[0]["device_code"]
 
 # Current state

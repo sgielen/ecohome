@@ -18,7 +18,8 @@ Body:
 
     {"page_index": "1", "page_size": "1000"}
 
-Returns `object_result` as a list of devices:
+Returns `object_result` as a list of devices owned by the authenticated user. Devices shared
+with you by others are not included; see `getMyAcceptDeviceShareDataList` in `shares.md`. Each device has:
 
 - `device_id`: opaque string ID
 - `device_code`: hardware serial used to identify the device in other endpoints
