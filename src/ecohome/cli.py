@@ -15,7 +15,7 @@ def _get_client(args: argparse.Namespace, force_relogin: bool = False) -> EcoHom
             file=sys.stderr,
         )
         sys.exit(1)
-    return EcoHomeClient.login(username, password, force_relogin=force_relogin)
+    return EcoHomeClient.login(username, password, force_relogin=force_relogin, language=args.language)
 
 
 def _auto_device_code(client: EcoHomeClient, args: argparse.Namespace) -> str:
@@ -186,6 +186,9 @@ def main() -> int:
     parser.add_argument("--password", default=None, help="Login password (or set ECOHOME_PASSWORD)")
     parser.add_argument("--device", default=None, help="Device code (auto-selected if only one exists)")
     parser.add_argument("--dry-run", action="store_true", help="Print the request instead of sending it")
+    parser.add_argument(
+        "--language", default="nl_NL", help="Language for names and labels, e.g. en or fr_FR (default: nl_NL)"
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 

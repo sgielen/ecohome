@@ -87,6 +87,7 @@ pyecohome hot-water on --dry-run
 | `--password` | Login password (overrides `ECOHOME_PASSWORD`) |
 | `--device` | Device code to target (auto-selected when you have only one device) |
 | `--dry-run` | Print the outgoing request instead of sending it |
+| `--language` | Language for names and labels, e.g. `en` or `fr_FR` (default: Dutch; see [Language](#language)) |
 
 ## Python API
 
@@ -110,12 +111,24 @@ client.update_switch_state(device_code, address="1020", value=True)
 client.logout()
 ```
 
-API responses default to Dutch for backward compatibility. Pass a full locale
-when logging in to request another supported language:
+### Language
+
+Labels in API responses (device, mode and parameter names) default to Dutch for
+backward compatibility. Pass `language` when logging in to request another
+language:
 
 ```python
 client = EcoHomeClient.login("you@example.com", "yourpassword", language="en_US")
 ```
+
+The API supports one locale per language: `de_DE`, `en_US`, `es_ES`, `fr_FR`,
+`it_IT`, `nl_NL`, `pl_PL`, `pt_PT`, `ru_RU` and `zh_CN`. Other locales of the same
+language are mapped to these, so `"en"`, `"en-GB"` and `"en_US"` all give English.
+Unsupported languages fall back to Dutch.
+
+The login request itself is always made in English, so error messages from a
+failed login (such as `AuthenticationFailedError.error_msg`) are in English
+regardless of `language`.
 
 ## Credentials storage
 
