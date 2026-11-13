@@ -10,6 +10,28 @@ import httpx
 _CLOUDSERVICE_BASE_URL = "https://ehome.ne01.com/cloudservice/api/app"
 _CRM_BASE_URL = "https://ehome.ne01.com/crmservice/api/app"
 _CREDENTIALS_FILE = Path.home() / ".ecohome" / "credentials.json"
+_DEFAULT_LANGUAGE = "nl_NL"
+
+# The API only translates for these exact locales; anything else (e.g. "en", "en_GB" or
+# "nl_BE") makes it respond in Chinese. So we map the caller's language on its base
+# language to the one locale the API supports for it.
+_SUPPORTED_LANGUAGES = {
+    "de": "de_DE",
+    "en": "en_US",
+    "es": "es_ES",
+    "fr": "fr_FR",
+    "it": "it_IT",
+    "nl": "nl_NL",
+    "pl": "pl_PL",
+    "pt": "pt_PT",
+    "ru": "ru_RU",
+    "zh": "zh_CN",
+}
+
+# Login always happens in English, so that we can recognize the wrong-password error by its
+# message (it has the generic error code -1).
+_LOGIN_LANGUAGE = "en_US"
+_INCORRECT_AUTH_ERROR = "Error username or password"
 
 # The server is occasionally slow to respond, so allow 30s for this.
 _DEFAULT_TIMEOUT = httpx.Timeout(5.0, read=30.0)
@@ -25,8 +47,22 @@ _HEADERS = {
         "Html5Plus/1.0 (Immersed/20) uni-app"
     ),
     "time-zone": "Europe/Berlin",
-    "Accept-Language": "nl-NL,nl;q=0.9",
 }
+
+
+def _api_language(language: str) -> str:
+    """Map a language or locale such as "en", "en-GB" or "fr_FR" to a locale the API supports.
+
+    Unsupported or empty languages fall back to Dutch.
+    """
+    base_language = language.replace("-", "_").split("_", 1)[0].lower()
+    return _SUPPORTED_LANGUAGES.get(base_language, _DEFAULT_LANGUAGE)
+
+
+def _headers(language: str) -> dict[str, str]:
+    locale = language.replace("_", "-")
+    base_language = locale.split("-", 1)[0]
+    return {**_HEADERS, "Accept-Language": f"{locale},{base_language};q=0.9"}
 
 
 def _load_credentials() -> dict[str, Any]:
@@ -95,12 +131,15 @@ class AsyncEcoHomeClient:
         user_id: str | None = None,
         username: str | None = None,
         autoretries: int = 2,
+        language: str = _DEFAULT_LANGUAGE,
     ):
         self._token = token
         self._cookie: dict[str, str] = cookie or {}
         self._user_id = user_id
         self._username = username
         self._autoretries = autoretries
+        self._language = _api_language(language)
+        self._headers = _headers(self._language)
 
     @classmethod
     async def login(
@@ -111,8 +150,15 @@ class AsyncEcoHomeClient:
         force_relogin: bool = False,
         timeout: httpx.Timeout | float | None = None,
         autoretries: int = 2,
+        language: str = _DEFAULT_LANGUAGE,
     ) -> "AsyncEcoHomeClient":
-        """Return an authenticated client, reusing stored credentials when available."""
+        """Return an authenticated client, reusing stored credentials when available.
+
+        `language` selects the language of labels in API responses. It accepts a locale or
+        language code such as "en_US", "en-GB" or "fr"; see the README for details. The login
+        request itself is always made in English, so error messages from a failed login (e.g.
+        AuthenticationFailedError.error_msg) are always in English.
+        """
         creds: dict[str, Any] = await asyncio.to_thread(_load_credentials) if save_credentials else {}
         if not force_relogin and username in creds:
             stored = creds[username]
@@ -122,6 +168,7 @@ class AsyncEcoHomeClient:
                 user_id=stored["user_id"],
                 username=username,
                 autoretries=autoretries,
+                language=language,
             )
             if await client.is_logged_in(timeout=timeout):
                 return client
@@ -131,8 +178,8 @@ class AsyncEcoHomeClient:
         async with await asyncio.to_thread(lambda: httpx.AsyncClient(timeout=timeout or _DEFAULT_TIMEOUT)) as http:
             response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/user/login.json",
-                params={"lang": "nl_NL"},
-                headers=_HEADERS,
+                params={"lang": _LOGIN_LANGUAGE},
+                headers=_headers(_LOGIN_LANGUAGE),
                 json={"user_name": username, "password": password_md5, "type": 2},
             )
         response.raise_for_status()
@@ -141,13 +188,7 @@ class AsyncEcoHomeClient:
 
         # Annoyingly, an "incorrect username or password" error has error code
         # -1, not anything distinguishable, so we just recognize it by message.
-        incorrectAuthErrors = [
-            "Fout gebruikersnaam of wachtwoord",  # nl_NL
-            "Error username or password",  # en_US
-            "Fehler Benutzername oder Passwort",  # de_DE
-            "用户名/密码错误",  # others
-        ]
-        if data['error_msg'] in incorrectAuthErrors:
+        if data.get("error_msg") == _INCORRECT_AUTH_ERROR:
             raise AuthenticationFailedError("login", data['error_code'], data['error_msg'])
 
         _raise_on_error(data, "login")
@@ -165,14 +206,20 @@ class AsyncEcoHomeClient:
             }
             await asyncio.to_thread(_save_credentials, creds)
 
-        return cls(token=x_token, cookie=cookie, user_id=user_id, username=username, autoretries=autoretries)
+        return cls(
+            token=x_token,
+            cookie=cookie,
+            user_id=user_id,
+            username=username,
+            autoretries=autoretries,
+            language=language,
+        )
 
     async def is_logged_in(self, timeout: httpx.Timeout | float | None = None) -> bool:
         """Do an API request to see if the user is logged in."""
         async with await self._http(timeout) as http:
             response = await http.get(
                 f"{_CLOUDSERVICE_BASE_URL}/user/getUserInfo.json",
-                params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
             )
         try:
@@ -187,7 +234,6 @@ class AsyncEcoHomeClient:
         async with await self._http(timeout) as http:
             response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/user/logout.json",
-                params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
                 json={"from_user": self._user_id},
             )
@@ -206,11 +252,17 @@ class AsyncEcoHomeClient:
     def _auth_headers(self) -> dict[str, str]:
         if self._token is None:
             raise RuntimeError("Not authenticated")
-        return {**_HEADERS, "x-token": self._token}
+        return {"x-token": self._token}
 
     async def _http(self, timeout: httpx.Timeout | float | None = None) -> httpx.AsyncClient:
+        """Return an HTTP client that sends the selected language with every request."""
         return await asyncio.to_thread(
-            lambda: httpx.AsyncClient(cookies=self._cookie, timeout=timeout or _DEFAULT_TIMEOUT)
+            lambda: httpx.AsyncClient(
+                cookies=self._cookie,
+                params={"lang": self._language},
+                headers=self._headers,
+                timeout=timeout or _DEFAULT_TIMEOUT,
+            )
         )
 
     async def list_devices(
@@ -219,7 +271,6 @@ class AsyncEcoHomeClient:
         async with await self._http(timeout) as http:
             response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/device/deviceList.json",
-                params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
                 json={"page_index": "1", "page_size": str(page_size)},
             )
@@ -238,7 +289,6 @@ class AsyncEcoHomeClient:
         async with await self._http(timeout) as http:
             response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/device/getMyAcceptDeviceShareDataList.json",
-                params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
                 json={"to_user": self._user_id},
             )
@@ -264,7 +314,6 @@ class AsyncEcoHomeClient:
         async with await self._http(timeout) as http:
             response = await http.post(
                 f"{_CLOUDSERVICE_BASE_URL}/deviceInfo/getDeviceBaseInfo.json",
-                params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
                 json={"device_code": device_code},
             )
@@ -277,7 +326,6 @@ class AsyncEcoHomeClient:
         async with await self._http(timeout) as http:
             response = await http.post(
                 f"{_CRM_BASE_URL}/deviceInfo/getDeviceDetailV3",
-                params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
                 json={"deviceCode": device_code},
             )
@@ -293,7 +341,6 @@ class AsyncEcoHomeClient:
         async with await self._http(timeout) as http:
             response = await http.post(
                 f"{_CRM_BASE_URL}/deviceInfo/paramListV3",
-                params={"lang": "nl_NL"},
                 headers=self._auth_headers(),
                 json={"deviceCode": device_code, "type": param_type, "isAutoRefresh": False},
             )
@@ -313,13 +360,13 @@ class AsyncEcoHomeClient:
         url = f"{_CLOUDSERVICE_BASE_URL}/deviceInfo/updateSwitchSate.json"
         body = {"device_code": device_code, "address": address, "value": value}
         if dry_run:
-            print(f"[dry-run] POST {url}?lang=nl_NL")
+            print(f"[dry-run] POST {url}?lang={self._language}")
             print(json.dumps(body, indent=2))
             return
         for attempt in range(self._autoretries + 1):
             try:
                 async with await self._http(timeout) as http:
-                    response = await http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
+                    response = await http.post(url, headers=self._auth_headers(), json=body)
                 response.raise_for_status()
                 data = response.json()
                 _raise_on_error(data, "updateSwitchState")
@@ -339,11 +386,11 @@ class AsyncEcoHomeClient:
         url = f"{_CLOUDSERVICE_BASE_URL}/deviceInfo/controlOfValue.json"
         body = {"device_code": device_code, "address": address, "value": value}
         if dry_run:
-            print(f"[dry-run] POST {url}?lang=nl_NL")
+            print(f"[dry-run] POST {url}?lang={self._language}")
             print(json.dumps(body, indent=2))
             return
         async with await self._http(timeout) as http:
-            response = await http.post(url, params={"lang": "nl_NL"}, headers=self._auth_headers(), json=body)
+            response = await http.post(url, headers=self._auth_headers(), json=body)
         response.raise_for_status()
         data = response.json()
         _raise_on_error(data, "controlOfValue")
@@ -364,11 +411,14 @@ class EcoHomeClient:
         force_relogin: bool = False,
         timeout: httpx.Timeout | float | None = None,
         autoretries: int = 2,
+        language: str = _DEFAULT_LANGUAGE,
     ) -> "EcoHomeClient":
         """Return an authenticated client, reusing stored credentials when available."""
         return cls(
             asyncio.run(
-                AsyncEcoHomeClient.login(username, password, save_credentials, force_relogin, timeout, autoretries)
+                AsyncEcoHomeClient.login(
+                    username, password, save_credentials, force_relogin, timeout, autoretries, language
+                )
             )
         )
 
